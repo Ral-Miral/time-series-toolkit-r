@@ -1,0 +1,185 @@
+---
+title: "**Time series study of the average power demand on the French electricity grid between 2012 and 2017**"
+author: "Arthur De Bock"
+date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+output: pdf_document
+---
+
+# 1. Presentation and context of the data
+
+The data is electricity consumption on the French grid from 2012 to today. It comes from the éCO2mix application of RTE, the operator of the French electricity transmission network, and is published as open data on the ODRÉ website (Open Data Réseaux Énergies), in the dataset "éCO2mix national consolidated and definitive data", which is updated once a day.
+
+The values are computed from meter readings, completed with estimates when readings are missing. They are called "consolidated" once verified (about one month later), then "definitive" when all partners have sent their readings (second half of the following year). The years 2012 to 2024 are definitive, more recent years are consolidated. Our study covers 2012 to 2017, plus the year 2018 reserved for checking the forecasts: we therefore only use definitive data.
+
+The variable studied is electricity consumption (column Consommation (MW)). It represents the average power demanded on the grid, not a quantity of energy. It is measured every 30 minutes and expressed in megawatts (MW). The dataset contains other variables (exchanges with neighbouring countries, CO2 emissions, ...) that we do not use.
+
+To make the analysis easier, we work on a monthly scale: for each month, we computed the mean of all measurements. We obtain a series of 72 observations, from January 2012 to December 2017, in MW. The data is monthly and the cycle repeats every year, so the period is p = 12.
+
+Does French electricity consumption show a trend (upward or downward) over 2012-2017, and can its monthly evolution in 2018 be forecast correctly?
+
+```{r, echo=F, include=F}
+# Import of the original dataset
+df = read.csv2("data.csv")
+
+# Switch to monthly scale
+mois_date = substr(as.character(df$Date), 1, 7)
+
+y_mois = aggregate(df$Consommation..MW.,
+                   list(mois = mois_date),
+                   mean,
+                   na.rm = TRUE)
+
+# Split: study period (2012-2017) and test period (2018)
+y_cut = y_mois[y_mois$mois >= "2012-01" & y_mois$mois <= "2017-12", ]
+test  = y_mois[y_mois$mois >= "2018-01" & y_mois$mois <= "2018-12", ]
+
+y      = y_cut$x
+y_test = test$x
+
+# Import of my R functions
+source("functions_EN.R")
+```
+
+```{r, echo=F}
+seasonal_plot = function(y, p, ylab, xlab, legend){
+  # Takes as input:
+  # y      = vector containing your data
+  # ylab   = label of the y-axis
+  # xlab   = label of the x-axis
+  # legend = vector containing: the name of the legend items (cycle, year, ...) and the starting number
+  # p      = periodicity
+  # Returns a seasonal plot of y
+
+  par(mar=c(5, 4, 4, 7))
+  n = length(y)
+  plot(y,
+       xlab=xlab,
+       ylab=ylab,
+       main=paste("Seasonal plot:", ylab),
+       xlim=c(1, p),
+       cex=0,
+       xaxt="n")
+  axis(1, at=1:p)
+
+  col=rainbow(n/p)
+  for(i in 0:(n/p - 1)){
+    lines(c(1:p),
+          (y[(1 + p*i) : (p + p*i)]),
+          col=col[i+1])
+  }
+  legend(p, max(y),
+         legend=paste(legend[1],
+                      legend[2]:(as.numeric(legend[2]) + n/p - 1)),
+         col=col,
+         lty=1,
+         xpd=TRUE)
+}
+```
+
+\newpage
+
+# 2. Chosen model, validation and analysis
+
+## Choice of the decomposition model
+
+#### *Figure 1 - Time plot of French electricity consumption (MW) by month from 2012 to 2017* {#fig1}
+
+```{r, echo=F, out.width=350, fig.align='center'}
+time_plot(y, ylab="Electricity consumption (MW)", xlab="Month")
+```
+
+#### *Figure 2 - Seasonal plot of French electricity consumption (MW) by month from 2012 to 2017* {#fig2}
+
+```{r, echo=F, out.width=350, fig.align='center'}
+seasonal_plot(y, 12, "Electricity consumption (MW)", "Month", c("Year", 2012))
+```
+
+
+
+In [**Figure 1**](#fig1), the series shows a clear annual seasonality: consumption is highest in winter (probably because of electric heating) and lowest in summer. [**Figure 2**](#fig2), which overlays all the periods, shows that the six years follow almost the same U-shaped curve. There is no visible trend and the average level stays close to 55,000 MW. The amplitude of the oscillations does not increase with the level of the series, so we choose the additive decomposition model: $y_t = f_t + S_t + e_t$.
+
+## Trend and seasonal coefficients
+
+#### *Figure 3 - Plot of French electricity consumption (MW) by month from 2012 to 2017, its smoothed series and its seasonally adjusted series* {#fig3}
+
+```{r, echo=F, fig.keep="first", out.width=400, fig.align='center'}
+res = time_series_study(y, 12, "A", "Electricity consumption (MW)", "Month")
+modele = res$modele
+a = coef(modele)[1]
+b = coef(modele)[2]
+pval = summary(modele)$coefficients[2, 4]
+R2 = summary(modele)$r.squared
+
+```
+
+In [**Figure 3**](#fig3), the line fitted to the seasonally adjusted (SA) series has the equation $\hat{f}_t = 55388 - 19t$ (t in months). The slope is not significantly different from 0 (p = 0.21) and the coefficient of determination $R^2$ is 0.022. French consumption is therefore stable over 2012-2017, while seasonality explains most of the variations.
+
+\newpage
+
+#### *Table 1 - Seasonal coefficients of French electricity consumption (MW) by month from 2012 to 2017* {#tab1}
+
+```{r, echo=F}
+S = round(res$Shat, 3)
+
+noms_mois = c("January", "February", "March", "April", "May", "June",
+              "July", "August", "September", "October", "November", "December")
+
+data.frame(Month = noms_mois[1:6],
+           Coef. = S[1:6],
+           Month = noms_mois[7:12],
+           Coef. = S[7:12],
+           check.names = FALSE) |> knitr::kable()
+```
+
+The seasonal coefficients in [**Table 1**](#tab1) (in MW, summing to zero) measure the gap between the month and the annual average. The month with the highest load is January (15,583 MW) and the one with the lowest load is August (-12,310 MW), giving a seasonal amplitude of about 27,893 MW.
+
+## Model validation
+
+#### *Figure 4 - Correlogram of the residuals of French electricity consumption (MW) by month from 2012 to 2017* {#fig4}
+
+```{r, echo=F, out.width=400, fig.align='center'}
+e = na.omit(as.numeric(res$e))
+acf(e, main="Correlogram of the residuals")
+```
+
+
+
+In [**Figure 4**](#fig4), only lag 11 goes beyond the confidence interval. With about twenty lags tested at 5%, an isolated exceedance is expected by chance. The additive model is therefore still validated.
+
+\newpage
+
+# 3. Short-term forecasts (year 2018)
+
+We compare four exponential smoothing methods (simple, double, damped Holt, additive Holt-Winters). The forecasts are computed only from the 2012-2017 data, then compared with the values actually observed in 2018.
+
+#### *Figure 5 - Plot of French electricity consumption (MW) by month from 2012 to 2018 and of the different forecasting methods for the year 2018* {#fig5}
+
+```{r, echo=F, out.width=400, fig.align='center'}
+pred = prediction(y, 12, "A", 12)
+
+y_ts = ts(c(y, y_test), start = c(2012, 1), frequency = 12)
+
+prev = list("Simple"       = as.numeric(pred$yalpha_simple),
+            "Double"       = as.numeric(pred$yalpha_double),
+            "Damped Holt"  = as.numeric(pred$yalpha_holt),
+            "Holt-Winters" = as.numeric(pred$yalpha_winters))
+
+couleurs = c("red", "green", "blue", "purple")
+
+plot(y_ts, type = "l", xlab = "Time (year)", ylab = "Consumption (MW)",
+     main = "Time plot with consumption forecast",
+     ylim = range(y_ts, unlist(prev)))
+for(i in seq_along(prev)){
+  lines(ts(prev[[i]], start = c(2018, 1), frequency = 12), col = couleurs[i], lwd = 2)
+}
+legend("topleft", legend = c("Observed", names(prev)),
+       col = c("black", couleurs), lty = 1, lwd = 2, bty = "n", cex = 0.8)
+```
+
+[**Figure 5**](#fig5) shows the whole series (2012 to 2018, in black) with the forecasts of each method starting from January 2018. Simple smoothing (in red) gives a flat line since it takes the last level of 2017 and keeps it all year. Double smoothing (in green) does slightly better, going down very slowly, which brings it closer to the exact curve. Damped Holt smoothing (in blue) goes very high, up to about 102,500 MW, far beyond anything observed since 2012. Only Holt-Winters (in purple) reproduces the correct U shape of the series.
+
+The first three methods do not know about seasonality. They look at the last months of 2017, which are high-consumption months, and do not know that consumption will go back down. Damped Holt takes the autumn rise for a real upward trend and extends it. Holt-Winters, on the other hand, separates seasonality from the rest, so it correctly forecasts the decrease.
+
+4. # Conclusion
+
+Over 2012-2017, average electricity consumption in France is stable around 55,000 MW, with no significant trend, and it is dominated by a marked additive seasonality with a winter peak. This regularity makes it possible to forecast the following year, provided that the Holt-Winters forecasting method is used.
